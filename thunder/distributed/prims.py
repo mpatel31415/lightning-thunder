@@ -5,7 +5,6 @@ import torch.distributed
 
 import thunder.core.utils as utils
 from thunder.core.prims import make_prim
-
 from thunder.core.proxies import DDPType, FutureTensorProxy, pytype, TensorProxy
 from thunder.core.transforms import register_augmented_forward, register_backward
 
@@ -261,6 +260,11 @@ update_bucket_view = make_prim(PrimIDs.UPDATE_BUCKET_VIEW, "update_bucket_view",
 def synchronize_augmented_forward_rule(
     a: TensorProxy, group: torch.distributed.ProcessGroup
 ) -> tuple[TensorProxy, tuple]:
+    from thunder.distributed import get_skip_data_parallel_grad_sync
+
+    if get_skip_data_parallel_grad_sync():
+        return a, (a.ddp_type, group)
+
     match a.ddp_type:
         case DDPType.REPLICATED:
             # Assuming that the input is a replicated tensor, so no need to do anything
@@ -287,6 +291,11 @@ def synchronize_augmented_forward_rule(
 def synchronize_backward_rule(
     ddp_type: DDPType, group: torch.distributed.ProcessGroup, grad: TensorProxy
 ) -> tuple[TensorProxy, None]:
+    from thunder.distributed import get_skip_data_parallel_grad_sync
+
+    if get_skip_data_parallel_grad_sync():
+        return grad, None
+
     preaverage_grad = grad / group.size()
     match ddp_type:
         case DDPType.REPLICATED:
