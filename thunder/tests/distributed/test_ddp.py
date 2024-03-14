@@ -8,7 +8,7 @@ import weakref
 from collections.abc import Sequence
 from functools import partial, wraps
 from itertools import product
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 import torch
@@ -526,19 +526,19 @@ class CompileDDPTest(DataParallelTestCase):
         def get_model_and_optimizer(device):
             m = ToyModel().to(device)
             ddp_m = ddp(m, bucket_size_in_mb=bucket_size_in_mb)
-            compiled_ddp_m = thunder.jit(
+            jitted_ddp_m = thunder.jit(
                 ddp_m,
                 cache_mode=CACHE_OPTIONS.CONSTANT_VALUES,
                 executors_list=executors_map[executor].executors_list(),
             )
-            optimizer = torch.optim.SGD(compiled_ddp_m.parameters(), lr=1e-3)
-            return compiled_ddp_m, optimizer
+            optimizer = torch.optim.SGD(jitted_ddp_m.parameters(), lr=1e-3)
+            return jitted_ddp_m, optimizer
 
         def is_comm(k: str) -> bool:
             return "allreduce_" in k or "all_reduce" in k
 
         self._run_no_sync_grad_accumulation_test(get_model_and_optimizer, is_comm, dataset_size)
-        
+
     def _run_no_sync_grad_accumulation_test(
         self,
         get_model_and_optimizer: Callable[[torch.device], tuple[torch.nn.Module, torch.optim.Optimizer]],
@@ -580,15 +580,15 @@ class CompileDDPTest(DataParallelTestCase):
             return loss
 
         def get_ground_truth_loss_grads(device, dataloader):
-            compiled_ddp_m, optimizer = get_model_and_optimizer(device)
-            initial_state_dict = compiled_ddp_m.state_dict()
+            jitted_model, optimizer = get_model_and_optimizer(device)
+            initial_state_dict = jitted_model.state_dict()
 
             losses, grads = [], []
 
             for iter_count, (x, y) in enumerate(dataloader):
                 optimizer.zero_grad()
-                losses.append(run_fwd_bwd(iter_count, compiled_ddp_m, x, y, num_grad_accum_steps=None))
-                grads.append([p.grad for p in compiled_ddp_m.parameters() if p.grad is not None])
+                losses.append(run_fwd_bwd(iter_count, jitted_model, x, y, num_grad_accum_steps=None))
+                grads.append([p.grad for p in jitted_model.parameters() if p.grad is not None])
                 optimizer.step()
 
             return initial_state_dict, losses, grads
@@ -597,16 +597,16 @@ class CompileDDPTest(DataParallelTestCase):
 
         gradients = defaultdict(list)
         for use_no_sync in (True, False):
-            compiled_ddp_m, optimizer = get_model_and_optimizer(device)
-            compiled_ddp_m.load_state_dict(initial_state_dict)
+            jitted_model, optimizer = get_model_and_optimizer(device)
+            jitted_model.load_state_dict(initial_state_dict)
 
             for iter_count, (x, y) in enumerate(dataloader):
                 loss = torch.zeros((), device=device)
-                with compiled_ddp_m.no_sync() if use_no_sync else nullcontext():
+                with jitted_model.no_sync() if use_no_sync else nullcontext():
                     for i in range(num_micro_batch - 1):
                         cur_loss = run_fwd_bwd(
                             iter_count,
-                            compiled_ddp_m,
+                            jitted_model,
                             x[i * micro_batch_size : (i + 1) * micro_batch_size, :],
                             y[i * micro_batch_size : (i + 1) * micro_batch_size, :],
                             num_micro_batch,
@@ -614,12 +614,12 @@ class CompileDDPTest(DataParallelTestCase):
                         with torch.no_grad():
                             loss += cur_loss
                 cur_loss = run_fwd_bwd(
-                    iter_count, compiled_ddp_m, x[-micro_batch_size:, :], y[-micro_batch_size:, :], num_micro_batch
+                    iter_count, jitted_model, x[-micro_batch_size:, :], y[-micro_batch_size:, :], num_micro_batch
                 )
                 with torch.no_grad():
                     loss += cur_loss
                 optimizer.step()
-                gradients[use_no_sync].append([p.grad for p in compiled_ddp_m.parameters() if p.grad is not None])
+                gradients[use_no_sync].append([p.grad for p in jitted_model.parameters() if p.grad is not None])
                 optimizer.zero_grad(set_to_none=True)
 
                 num_expected_caches: int
@@ -627,7 +627,7 @@ class CompileDDPTest(DataParallelTestCase):
                     num_expected_caches = 2
                 else:
                     num_expected_caches = 1
-                self.assertEqual(len(compiled_ddp_m._lc_cs.interpreter_cache), num_expected_caches)
+                self.assertEqual(len(jitted_model._lc_cs.interpreter_cache), num_expected_caches)
 
                 torch.testing.assert_close(loss, ground_truth_losses[iter_count], atol=1e-4, rtol=1e-4)
                 torch.testing.assert_close(
