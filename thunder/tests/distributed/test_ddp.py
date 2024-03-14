@@ -539,6 +539,44 @@ class CompileDDPTest(DataParallelTestCase):
 
         self._run_no_sync_grad_accumulation_test(get_model_and_optimizer, is_comm, dataset_size)
 
+    @common_utils.parametrize(
+        "executor,bucketing_strategy,fsdptype,dataset_size",
+        product(
+            tuple(executors_map.keys()),
+            (FSDPBucketingStrategy.LAYER, FSDPBucketingStrategy.BLOCK),
+            (FSDPType.ZERO2, FSDPType.ZERO3),
+            (1, 2),
+        ),
+        name_fn=lambda executor, bucketing_strategy, fsdptype, dataset_size: (
+            f"executor_{executor}_bucketing_{str(bucketing_strategy).split('.')[1].lower()}_{(str(fsdptype).lower().split('.')[1])}_dataset_size_{dataset_size}"
+        ),
+    )
+    def test_fsdp_with_no_sync_grad_accumulation(
+        self,
+        executor,
+        bucketing_strategy: FSDPBucketingStrategy,
+        fsdptype: FSDPType,
+        dataset_size: int,
+    ):
+        from thunder.common import CACHE_OPTIONS
+        from thunder.distributed import fsdp
+
+        def get_model_and_optimizer(device):
+            m = ToyModel().to(device)
+            fsdp_m = fsdp(m, bucketing_strategy=bucketing_strategy, sharding_strategy=fsdptype)
+            jitted_ddp_m = thunder.jit(
+                fsdp_m,
+                cache_mode=CACHE_OPTIONS.CONSTANT_VALUES,
+                executors_list=executors_map[executor].executors_list(),
+            )
+            optimizer = torch.optim.SGD(jitted_ddp_m.parameters(), lr=1e-3)
+            return jitted_ddp_m, optimizer
+
+        def is_comm(k: str) -> bool:
+            return "reducescatter" in k or "reduce_scatter" in k
+
+        self._run_no_sync_grad_accumulation_test(get_model_and_optimizer, is_comm, dataset_size)
+
     def _run_no_sync_grad_accumulation_test(
         self,
         get_model_and_optimizer: Callable[[torch.device], tuple[torch.nn.Module, torch.optim.Optimizer]],
