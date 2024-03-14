@@ -8,6 +8,7 @@ import weakref
 from collections.abc import Sequence
 from functools import partial, wraps
 from itertools import product
+from typing import Callable
 
 import pytest
 import torch
@@ -519,11 +520,44 @@ class CompileDDPTest(DataParallelTestCase):
         # the trace should have.
         # For numerical parity, we compare the accumulated gradients with and without `no_sync` and even against gradients without accumulation.
         # If they are different, it'd be impossible to keep replicas identical.
-        from collections import defaultdict
-        from contextlib import nullcontext
         from thunder.common import CACHE_OPTIONS
         from thunder.distributed import ddp
+
+        def get_model_and_optimizer(device):
+            m = ToyModel().to(device)
+            ddp_m = ddp(m, bucket_size_in_mb=bucket_size_in_mb)
+            compiled_ddp_m = thunder.jit(
+                ddp_m,
+                cache_mode=CACHE_OPTIONS.CONSTANT_VALUES,
+                executors_list=executors_map[executor].executors_list(),
+            )
+            optimizer = torch.optim.SGD(compiled_ddp_m.parameters(), lr=1e-3)
+            return compiled_ddp_m, optimizer
+
+        def is_comm(k: str) -> bool:
+            return "allreduce_" in k or "all_reduce" in k
+
+        self._run_no_sync_grad_accumulation_test(get_model_and_optimizer, is_comm, dataset_size)
+        
+    def _run_no_sync_grad_accumulation_test(
+        self,
+        get_model_and_optimizer: Callable[[torch.device], tuple[torch.nn.Module, torch.optim.Optimizer]],
+        is_comm: Callable[[str], bool],
+        dataset_size,
+    ):
+        from collections import defaultdict
+        from contextlib import nullcontext
         from thunder.distributed import get_skip_data_parallel_grad_sync
+
+        device = torch.device("cuda", self.rank)
+        batch_size = 128
+        num_micro_batch = 4
+        micro_batch_size = batch_size // num_micro_batch
+        with torch.no_grad():
+            dataloader = [
+                (torch.randn(batch_size, 12, device=device), torch.randn(batch_size, 8, device=device))
+                for _ in range(dataset_size)
+            ]
 
         # TODO(crcrpar): Use `last_traces` to check if allreduce was called, instead of `torch.profiler.profile`
         # See: https://github.com/Lightning-AI/lightning-thunder/pull/1881#issuecomment-1910455732
@@ -536,7 +570,7 @@ class CompileDDPTest(DataParallelTestCase):
                 loss.backward()
 
             keys = tuple([e.key for e in prof.key_averages()])
-            has_allreduce = any(("allreduce_" in k or "all_reduce" in k) for k in keys)
+            has_allreduce = any(is_comm(k) for k in keys)
             msg = f"{keys=}"
             if get_skip_data_parallel_grad_sync():
                 self.assertFalse(has_allreduce, msg=msg)
@@ -544,17 +578,6 @@ class CompileDDPTest(DataParallelTestCase):
                 self.assertTrue(has_allreduce, msg=msg)
 
             return loss
-
-        def get_model_and_optimizer(device):
-            m = ToyModel().to(device)
-            ddp_m = ddp(m, bucket_size_in_mb=bucket_size_in_mb)
-            compiled_ddp_m = thunder.jit(
-                ddp_m,
-                cache_mode=CACHE_OPTIONS.CONSTANT_VALUES,
-                executors_list=executors_map[executor].executors_list(),
-            )
-            optimizer = torch.optim.SGD(compiled_ddp_m.parameters(), lr=1e-3)
-            return compiled_ddp_m, optimizer
 
         def get_ground_truth_loss_grads(device, dataloader):
             compiled_ddp_m, optimizer = get_model_and_optimizer(device)
@@ -569,17 +592,6 @@ class CompileDDPTest(DataParallelTestCase):
                 optimizer.step()
 
             return initial_state_dict, losses, grads
-
-        device = torch.device("cuda", self.rank)
-
-        batch_size = 128
-        num_micro_batch = 4
-        micro_batch_size = batch_size // num_micro_batch
-        with torch.no_grad():
-            dataloader = [
-                (torch.randn(batch_size, 12, device=device), torch.randn(batch_size, 8, device=device))
-                for _ in range(dataset_size)
-            ]
 
         initial_state_dict, ground_truth_losses, ground_truth_grads = get_ground_truth_loss_grads(device, dataloader)
 
