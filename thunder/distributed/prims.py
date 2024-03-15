@@ -292,8 +292,9 @@ def synchronize_backward_rule(
         match ddp_type:
             case DDPType.REPLICATED:
                 return grad, None
+            # TODO(crcrpar): Devise a way to stash full grads
             case DDPType.FULLY_SHARDED:
-                return grad, None
+                return None, None
             case _:
                 utils.check(False, lambda: f"synchronize with unexpected {ddp_type=}")
 

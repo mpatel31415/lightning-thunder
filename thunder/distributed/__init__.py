@@ -70,7 +70,11 @@ def skip_data_parallel_grad_sync() -> None:
 def _sync_grads(module: torch.nn.Module) -> None:
     import thunder
 
+    if getattr(module, "use_fsdp", False):
+        return
     params_with_grad = [p for p in module.parameters() if p.grad is not None]
+    if not params_with_grad:
+        return
     grads = [p.grad for p in params_with_grad]
     process_group = thunder.compile_data(module).process_group_for_ddp
     torch._foreach_div_(grads, process_group.size())
