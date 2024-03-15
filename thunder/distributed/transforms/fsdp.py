@@ -23,6 +23,7 @@ from thunder.core.transforms import VISIT_TYPE
 from thunder.core.transforms import visitor_transform
 from thunder.distributed import FSDPBucketingStrategy
 from thunder.distributed import FSDPType
+from thunder.distributed import get_skip_data_parallel_grad_sync
 from thunder.distributed import get_extract_bucket_name_from_tensor_proxy
 from thunder.distributed.bucketing import FSDPBackwardBucket
 from thunder.distributed.bucketing import FSDPForwardBucket
@@ -621,7 +622,7 @@ class FSDPCommBucketing:
             - :class:`TraceCtx`
         """
 
-        if not self.apply_bucketing:
+        if (not self.apply_bucketing) or get_skip_data_parallel_grad_sync():
             return fsdp_bwd_trace
 
         # Apply bucketing to parameter unsharding (= AllGather)
