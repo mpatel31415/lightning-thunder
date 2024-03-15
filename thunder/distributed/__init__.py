@@ -67,21 +67,48 @@ def skip_data_parallel_grad_sync() -> None:
         reset_skip_data_parallel_grad_sync(token)
 
 
-def _sync_grads(module: torch.nn.Module) -> None:
-    import thunder
+def _sync_grads(module: torch.nn.Module, param_to_hook_and_handle=None) -> None:
+    from thunder import compile_data
 
     if getattr(module, "use_fsdp", False):
-        return
-    params_with_grad = [p for p in module.parameters() if p.grad is not None]
-    if not params_with_grad:
-        return
-    grads = [p.grad for p in params_with_grad]
-    process_group = thunder.compile_data(module).process_group_for_ddp
-    torch._foreach_div_(grads, process_group.size())
-    with tdist.distributed_c10d._coalescing_manager(group=process_group, async_ops=True) as cm:
-        for g in grads:
-            tdist.distributed_c10d.all_reduce(g)
-    cm.wait()
+        utils.check(
+            param_to_hook_and_handle is not None,
+            lambda: "sync grads for fsdp requires param_to_hook_and_handle",
+        )
+        params_with_grad = []
+        unsharded_grads = []
+        for param in module.parameters():
+            hook, handle = param_to_hook_and_handle[param]
+            accumulated_unsharded_grad = hook.get_and_remove_accumulated_unsharded_grad()
+            if accumulated_unsharded_grad is not None:
+                params_with_grad.append(param)
+                unsharded_grads.append(accumulated_unsharded_grad)
+            handle.remove()
+        if not unsharded_grads:
+            group = compile_data(module).process_group_for_ddp
+            torch._foreach_div_(unsharded_grads, group.size())
+            sharded_grads = []
+            with tdist.distributed.distributed_c10d._coalescing_manager(group=group, async_ops=True) as cm:
+                for g in unsharded_grads:
+                    chunk_size = g.size(0) // group.size()
+                    rank = tdist.get_rank(group)
+                    out = g.narrow(0, rank * chunk_size, chunk_size)
+                    tdist.reduce_scatter(out, g)
+                    sharded_grads.append(out)
+            cm.wait()
+            for p, g in zip(params_with_grad, sharded_grads):
+                p.grad = g
+    if getattr(module, "use_ddp", False):
+        params_with_grad = [p for p in module.parameters() if p.grad is not None]
+        if not params_with_grad:
+            return
+        grads = [p.grad for p in params_with_grad]
+        process_group = compile_data(module).process_group_for_ddp
+        torch._foreach_div_(grads, process_group.size())
+        with tdist.distributed_c10d._coalescing_manager(group=process_group, async_ops=True) as cm:
+            for g in grads:
+                tdist.distributed_c10d.all_reduce(g)
+        cm.wait()
 
 
 # TODO Verify parameters are not partially initialized
