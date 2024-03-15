@@ -368,6 +368,49 @@ def check_num_comm_and_wait(
         utils.check(len(produced_futures) == len(consumed_futures), lambda: msg)
 
 
+def stash_unsharded_grads_and_return_none_as_grads(fsdp_bwd_trace: TraceCtx) -> TraceCtx:
+    orig_bsyms: list[BoundSymbol] = fsdp_bwd_trace.bound_symbols
+    producers, consumers = utils.producers_and_consumers(orig_bsyms)
+    bsyms_of_unsharded_grad: dict[BoundSymbol, BoundSymbol] = {}
+    bsyms_to_skip: dict[BoundSymbol, BoundSymbol] = {}
+
+    flat_outputs, output_spec = tree_flatten(fsdp_bwd_trace.output)
+    new_flat_outputs = []
+    for output_proxy in flat_outputs:
+        if isinstance(output_proxy, TensorProxy):
+            reduce_scatter_bsym = get_bsym_of_reduce_scatter(output_proxy, producers)
+            prod_of_unsharded_grad = producers[reduce_scatter_bsym.flat_proxy_args[0]]
+            bsyms_of_unsharded_grad[prod_of_unsharded_grad] = prod_of_unsharded_grad
+            wait_bsym = consumers[reduce_scatter_bsym.flat_proxy_outs[0]][0]
+
+            bsyms_to_skip[reduce_scatter_bsym] = reduce_scatter_bsym
+            bsyms_to_skip[wait_bsym] = wait_bsym
+        new_flat_outputs.append(None)
+
+    bsyms: list[BoundSymbol] = []
+    for bsym in orig_bsyms:
+        if bsym in bsyms_to_skip:
+            continue
+        if bsym in bsyms_of_unsharded_grad:
+            new_bsym = bsym.from_bsym(**{})
+            new_bsym.sym = new_bsym.sym.with_tags([prims.OpTags.DONT_DCE])
+            bsyms.append(new_bsym)
+        elif bsym.sym.id == prims.PrimIDs.RETURN:
+            swap_map = {}
+            for o in bsym.flat_proxy_args + bsym.flat_proxy_outs:
+                swap_map[variableify(o)] = None
+            new_bsym = bsym.from_bsym_swap_proxies(swap_map)
+            assert new_bsym.sym.id == prims.PrimIDs.RETURN
+            bsyms.append(new_bsym)
+        else:
+            bsyms.append(bsym)
+
+    grad_sync_free_trace = from_trace(fsdp_bwd_trace)
+    grad_sync_free_trace.bound_symbols = bsyms
+    assert bsyms[-1].sym.id == prims.PrimIDs.RETURN
+    return grad_sync_free_trace
+
+
 class FSDPCommBucketing:
     """Apply communication bucketing to FSDP traces.
 
@@ -622,7 +665,10 @@ class FSDPCommBucketing:
             - :class:`TraceCtx`
         """
 
-        if (not self.apply_bucketing) or get_skip_data_parallel_grad_sync():
+        if get_skip_data_parallel_grad_sync():
+            return stash_unsharded_grads_and_return_none_as_grads(fsdp_bwd_trace)
+
+        if not self.apply_bucketing:
             return fsdp_bwd_trace
 
         # Apply bucketing to parameter unsharding (= AllGather)

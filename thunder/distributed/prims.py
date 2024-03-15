@@ -290,11 +290,11 @@ def synchronize_backward_rule(
 
     if get_skip_data_parallel_grad_sync():
         match ddp_type:
+            # TODO(crcrpar): Devise a way to stash full grads for `FULLY_SHARDED`
             case DDPType.REPLICATED:
                 return grad, None
-            # TODO(crcrpar): Devise a way to stash full grads
             case DDPType.FULLY_SHARDED:
-                return None, None
+                return reduce_scatter(grad, DistributedReduceOps.SUM, group, do_async=True).wait(), None
             case _:
                 utils.check(False, lambda: f"synchronize with unexpected {ddp_type=}")
 
