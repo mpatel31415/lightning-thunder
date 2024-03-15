@@ -394,9 +394,9 @@ def jit(
         cache_info["is_autocast_enabled"] = is_autocast_enabled
 
         # TODO(crcrpar): support FSDP as well
-        is_ddp_enabled = getattr(fn, "use_ddp", False)
+        is_ddp_or_fsdp_enabled = getattr(fn, "use_ddp", False) or getattr(fn, "use_fsdp", False)
         no_grad_sync = False
-        if is_ddp_enabled:
+        if is_ddp_or_fsdp_enabled:
             from thunder.distributed import get_skip_data_parallel_grad_sync
 
             no_grad_sync = get_skip_data_parallel_grad_sync()
