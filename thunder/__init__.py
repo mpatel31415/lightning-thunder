@@ -393,7 +393,6 @@ def jit(
 
         cache_info["is_autocast_enabled"] = is_autocast_enabled
 
-        # TODO(crcrpar): support FSDP as well
         is_ddp_or_fsdp_enabled = getattr(fn, "use_ddp", False) or getattr(fn, "use_fsdp", False)
         no_grad_sync = False
         if is_ddp_or_fsdp_enabled:
