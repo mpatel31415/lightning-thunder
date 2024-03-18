@@ -374,7 +374,7 @@ def stash_unsharded_grads_and_return_none_as_grads(fsdp_bwd_trace: TraceCtx) -> 
     bsyms_of_unsharded_grad: dict[BoundSymbol, BoundSymbol] = {}
     bsyms_to_skip: dict[BoundSymbol, BoundSymbol] = {}
 
-    flat_outputs, output_spec = tree_flatten(fsdp_bwd_trace.output)
+    flat_outputs, _ = tree_flatten(fsdp_bwd_trace.output)
     new_flat_outputs = []
     for output_proxy in flat_outputs:
         if isinstance(output_proxy, TensorProxy):
@@ -391,11 +391,13 @@ def stash_unsharded_grads_and_return_none_as_grads(fsdp_bwd_trace: TraceCtx) -> 
     for bsym in orig_bsyms:
         if bsym in bsyms_to_skip:
             continue
-        if bsym in bsyms_of_unsharded_grad:
+        elif bsym in bsyms_of_unsharded_grad:
             new_bsym = bsym.from_bsym(**{})
             new_bsym.sym = new_bsym.sym.with_tags([prims.OpTags.DONT_DCE])
             bsyms.append(new_bsym)
         elif bsym.sym.id == prims.PrimIDs.RETURN:
+            # As `nn.Parameter`s cann not have `.grad` attribute of a different shape,
+            # under `skip_grad_sync`, we return `None` instead
             swap_map = {}
             for o in bsym.flat_proxy_args + bsym.flat_proxy_outs:
                 swap_map[variableify(o)] = None
