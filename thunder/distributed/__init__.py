@@ -95,13 +95,20 @@ def _sync_grads(module: torch.nn.Module) -> None:
         if not params_with_grad:
             return
         unsharded_grads = [f(p) for p in params_with_grad]
-        torch._foreach_div_(unsharded_grads, world_size)
-        sharded_grads = [prep_output_buffer(g, rank, world_size) for g in unsharded_grads]
-        for p, g in zip(params_with_grad, sharded_grads):
-            p.grad = g
+        grouped_param_and_grad = torch._group_tensors_by_device_and_dtype(
+            (params_with_grad, unsharded_grads), with_indices=False
+        )
+        unsharded_to_sharded = {}
+
+        for (grouped_params, grouped_unsharded_grads), _ in grouped_param_and_grad.values():
+            torch._foreach_div_(grouped_unsharded_grads, world_size)
+            grouped_sharded_grads = [prep_output_buffer(g, rank, world_size) for g in unsharded_grads]
+            for p, unsharded_g, sharded_g in zip(grouped_params, grouped_unsharded_grads, grouped_sharded_grads):
+                p.grad = sharded_g
+                unsharded_to_sharded[unsharded_g] = sharded_g
         with tdist.distributed_c10d._coalescing_manager(group=process_group, async_ops=True) as cm:
-            for g, out in zip(unsharded_grads, sharded_grads):
-                tdist.distributed_c10d.reduce_scatter_tensor(out, g)
+            for unsharded_g, sharded_g in unsharded_to_sharded.items():
+                tdist.distributed_c10d.reduce_scatter_tensor(sharded_g, unsharded_g)
         cm.wait()
     elif getattr(module, "use_ddp", False):
         params_with_grad = [p for p in module.parameters() if p.grad is not None]
