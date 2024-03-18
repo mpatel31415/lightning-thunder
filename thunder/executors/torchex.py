@@ -1,3 +1,4 @@
+from __future__ import annotations
 import operator
 import importlib
 from dataclasses import replace
@@ -6,7 +7,7 @@ from functools import wraps, partial
 from inspect import signature
 from itertools import groupby
 from numbers import Number
-from typing import Union, Any, Tuple, Optional
+from typing import TYPE_CHECKING
 from collections.abc import Callable
 from collections.abc import Hashable, Sequence
 from collections.abc import Sequence
@@ -36,6 +37,9 @@ import thunder.torch as ltorch
 from thunder.torch import DeviceLike, dtypeLike, TensorLike
 
 from thunder.extend import OperatorExecutor, register_executor, add_always_executor
+
+if TYPE_CHECKING:
+    from thunder.common import CompileData
 
 ex = OperatorExecutor("torch", version=torch.__version__)
 register_executor(ex)
@@ -1708,8 +1712,9 @@ if torch.distributed.is_available():
 
     def _stash_grad_for_fsdp_prim_impl(
         grad: torch.Tensor,
-        key: str,
-        compile_data: Any,
+        layer_name: str,
+        param_name: str,
+        compile_data: CompileData,
     ) -> None:
         return
 

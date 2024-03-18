@@ -1,6 +1,7 @@
+from __future__ import annotations
 from enum import auto, Enum
-from typing import Any
 from numbers import Number
+from typing import TYPE_CHECKING
 
 import torch.distributed
 
@@ -9,6 +10,9 @@ from thunder.core.prims import make_prim
 from thunder.core.prims import OpTags
 from thunder.core.proxies import DDPType, FutureTensorProxy, pytype, TensorProxy
 from thunder.core.transforms import register_augmented_forward, register_backward
+
+if TYPE_CHECKING:
+    from thunder.common import CompileData
 
 
 class PrimIDs(Enum):
@@ -246,10 +250,18 @@ def update_bucket_view_meta(tensor: TensorProxy, index_of_dst_view: int, bucket_
     return TensorProxy(like=tensor)
 
 
-def stash_grad_for_fsdp_meta(grad: TensorProxy, key: str, compile_data: Any) -> None:
+def stash_grad_for_fsdp_meta(
+    grad: TensorProxy,
+    layer_name: str,
+    param_name: str,
+    compile_data: CompileData,
+) -> None:
+    from thunder.common import CompileData
+
     utils.check_type(grad, TensorProxy)
-    utils.check_type(key, str)
-    utils.check(compile_data is not None, lambda: "asdf")
+    utils.check_type(layer_name, str)
+    utils.check_type(param_name, str)
+    utils.check_type(compile_data, CompileData)
     return None
 
 

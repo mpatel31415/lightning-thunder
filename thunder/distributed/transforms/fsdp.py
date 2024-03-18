@@ -368,29 +368,39 @@ def check_num_comm_and_wait(
         utils.check(len(produced_futures) == len(consumed_futures), lambda: msg)
 
 
-def stash_unsharded_grads_and_return_none_as_grads(fsdp_bwd_trace: TraceCtx, compile_data) -> TraceCtx:
-    orig_bsyms: list[BoundSymbol] = fsdp_bwd_trace.bound_symbols
-    producers, consumers = utils.producers_and_consumers(orig_bsyms)
-    bsyms_of_unsharded_grad: dict[BoundSymbol, BoundSymbol] = {}
+def stash_unsharded_grads_and_return_none_as_grads(
+    fsdp_bwd_trace: TraceCtx,
+    compile_data: CompileData,
+    index_in_flat_args_to_param_and_bucket: dict[int, tuple[TensorProxy, Bucket]],
+) -> TraceCtx:
+    producers, consumers = utils.producers_and_consumers(fsdp_bwd_trace)
+    bsyms_of_unsharded_grad: dict[BoundSymbol, tuple[str, str]] = {}
     bsyms_to_skip: dict[BoundSymbol, BoundSymbol] = {}
 
     flat_outputs, output_spec = tree_flatten(fsdp_bwd_trace.output)
-    for output_proxy in flat_outputs:
+    for index, output_proxy in enumerate(flat_outputs):
         if isinstance(output_proxy, TensorProxy):
             reduce_scatter_bsym = get_bsym_of_reduce_scatter(output_proxy, producers)
             prod_of_unsharded_grad = producers[reduce_scatter_bsym.flat_proxy_args[0]]
-            bsyms_of_unsharded_grad[prod_of_unsharded_grad] = prod_of_unsharded_grad
             wait_bsym = consumers[reduce_scatter_bsym.flat_proxy_outs[0]][0]
 
             bsyms_to_skip[reduce_scatter_bsym] = reduce_scatter_bsym
             bsyms_to_skip[wait_bsym] = wait_bsym
+
+            # Unfortunately `param.name` is different from module's name... oh no...
+            param, _ = index_in_flat_args_to_param_and_bucket[index]
+            names = param.name.split(".")[1:]
+            param_name = names[-1]
+            layer_name = ".".join(names[:-1])
+            bsyms_of_unsharded_grad[prod_of_unsharded_grad] = (layer_name, param_name)
 
     def visit(bsym: BoundSymbol) -> VISIT_TYPE:
         if bsym in bsyms_to_skip:
             return VISIT_TYPE.REPLACE
         elif bsym in bsyms_of_unsharded_grad:
             unsharded_grad = bsym.flat_proxy_outs[0]
-            dist_prims.stash_grad_for_fsdp_meta(unsharded_grad, "A", compile_data)
+            layer_name, param_name = bsyms_of_unsharded_grad[bsym]
+            dist_prims.stash_grad_for_fsdp_meta(unsharded_grad, layer_name, param_name, compile_data)
             return VISIT_TYPE.INSERT_AFTER
         elif bsym.sym.id == prims.PrimIDs.RETURN:
             prims.python_return(tree_unflatten([None for _ in flat_outputs], output_spec))
@@ -660,7 +670,11 @@ class FSDPCommBucketing:
         """
 
         if get_skip_data_parallel_grad_sync():
-            return stash_unsharded_grads_and_return_none_as_grads(fsdp_bwd_trace, self.compile_data)
+            return stash_unsharded_grads_and_return_none_as_grads(
+                fsdp_bwd_trace,
+                self.compile_data,
+                self.index_in_flat_args_to_param_and_bucket,
+            )
 
         if not self.apply_bucketing:
             return fsdp_bwd_trace
