@@ -37,8 +37,6 @@ from thunder.executors.torchex import unpack_for_fsdp_prim_impl
 from thunder.executors.torchex import wait_prim_impl
 
 if TYPE_CHECKING:
-    from torch import Tensor
-    from torch.nn import Parameter
     from thunder import CompileData
     from thunder.core.trace import TraceCtx
     from thunder.distributed.bucketing import Bucket
@@ -668,7 +666,7 @@ class FSDPCommBucketing:
         """
 
         if get_skip_data_parallel_grad_sync():
-            return fsdp_bwd_trace
+            return stash_unsharded_grads_and_return_none_as_grads(fsdp_bwd_trace)
 
         if not self.apply_bucketing:
             return fsdp_bwd_trace
@@ -679,32 +677,3 @@ class FSDPCommBucketing:
 
         # Apply bucketing to gradient sharding (= ReduceScatter)
         return self._apply_bucketing_to_backward_reduce_scatter(fsdp_bwd_trace)
-
-
-class FSDPNoSyncBackwardTensorHook:
-    UNSHARDED_GRAD_NAME = "fsdp_unsharded_grad"
-
-    def __init__(self, param_name: str, param: Tensor | Parameter) -> None:
-        self._name = param_name
-        self._param = param
-
-    def __call__(self, grad: Tensor) -> Tensor | None:
-        if grad is None:
-            return
-        if (accumulated_unsharded_grad := self._get_accumulated_unsharded_grad()) is None:
-            setattr(self._param, FSDPNoSyncBackwardTensorHook.UNSHARDED_GRAD_NAME, grad)
-        else:
-            import torch
-
-            with torch.no_grad():
-                accumulated_unsharded_grad += grad
-
-        return None
-
-    def _get_accumulated_unsharded_grad(self) -> None:
-        return getattr(self._param, FSDPNoSyncBackwardTensorHook.UNSHARDED_GRAD_NAME, None)
-
-    def get_and_remove_accumulated_unsharded_grad(self) -> Tensor | None:
-        accumulated_unsharded_grad = self._get_accumulated_unsharded_grad()
-        delattr(self._param, FSDPNoSyncBackwardTensorHook.UNSHARDED_GRAD_NAME)
-        return accumulated_unsharded_grad

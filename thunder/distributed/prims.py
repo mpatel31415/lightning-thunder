@@ -294,8 +294,7 @@ def synchronize_backward_rule(
             case DDPType.REPLICATED:
                 return grad, None
             case DDPType.FULLY_SHARDED:
-                unsharded_grad = grad
-                return unsharded_grad, None
+                return reduce_scatter(grad, DistributedReduceOps.SUM, group, do_async=True).wait(), None
             case _:
                 utils.check(False, lambda: f"synchronize with unexpected {ddp_type=}")
 

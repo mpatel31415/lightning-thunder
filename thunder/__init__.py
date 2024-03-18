@@ -231,24 +231,12 @@ class ThunderModule(pytorch.nn.Module):
             _sync_grads,
         )
 
-        compile_data = thunder.compile_data(self)
-        is_fsdp = getattr(compile_data.fn, "use_ddp", False)
-
-        param_to_hook_and_handle = {}
-        if is_fsdp:
-            from thunder.distributed.transforms import FSDPNoSyncBackwardTensorHook
-
-            for name, param in self.named_parameters():
-                hook = FSDPNoSyncBackwardTensorHook(name, param)
-                handle = param.register_hook(hook)
-                param_to_hook_and_handle[param] = (hook, handle)
-
         token = set_skip_data_parallel_grad_sync(True)
         try:
             yield
         finally:
             reset_skip_data_parallel_grad_sync(token)
-            _sync_grads(self, param_to_hook_and_handle if is_fsdp else None)
+            _sync_grads(self)
 
     def __getattr__(self, name: str) -> Any:
         if name == "_model":
