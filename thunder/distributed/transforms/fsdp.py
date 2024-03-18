@@ -371,7 +371,7 @@ def check_num_comm_and_wait(
 def stash_unsharded_grads_and_return_none_as_grads(
     fsdp_bwd_trace: TraceCtx,
     compile_data: CompileData,
-    index_in_flat_args_to_param_and_bucket: dict[int, tuple[TensorProxy, Bucket]],
+    computation_trc_flat_args: list[Proxy],
 ) -> TraceCtx:
     producers, consumers = utils.producers_and_consumers(fsdp_bwd_trace)
     bsyms_of_unsharded_grad: dict[BoundSymbol, tuple[str, str]] = {}
@@ -387,11 +387,11 @@ def stash_unsharded_grads_and_return_none_as_grads(
             bsyms_to_skip[reduce_scatter_bsym] = reduce_scatter_bsym
             bsyms_to_skip[wait_bsym] = wait_bsym
 
-            # Unfortunately `param.name` is different from module's name... oh no...
-            param, _ = index_in_flat_args_to_param_and_bucket[index]
-            names = param.name.split(".")[1:]
-            param_name = names[-1]
-            layer_name = ".".join(names[:-1])
+            param = computation_trc_flat_args[index]
+            utils.check_type(param, TensorProxy)
+            chunked_param_name = param.name.split("_")
+            layer_name = ".".join(chunked_param_name[1:-1])
+            param_name = chunked_param_name[-1]
             bsyms_of_unsharded_grad[prod_of_unsharded_grad] = (layer_name, param_name)
 
     def visit(bsym: BoundSymbol) -> VISIT_TYPE:
@@ -429,6 +429,7 @@ class FSDPCommBucketing:
     def __init__(
         self,
         compile_data: CompileData,
+        computation_trc: TraceCtx,
     ) -> None:
         self.compile_data = compile_data
         utils.check(
@@ -443,6 +444,10 @@ class FSDPCommBucketing:
         self.group: ProcessGroup = compile_data.fn.process_group_for_ddp
 
         self.requires_bwd_bucketing_allgather = compile_data.fn.sharding_strategy == FSDPType.ZERO3
+        self.computation_trc = computation_trc
+        self.computation_trc_flat_args, self._computation_trc_flat_args_spec = tree_flatten(
+            (self.computation_trc.args, self.computation_trc.kwargs)
+        )
 
     def update_name_set(self, backward_trace: TraceCtx) -> TraceCtx:
         if not self.apply_bucketing:
@@ -479,6 +484,11 @@ class FSDPCommBucketing:
             - :class:`TraceCtx`
             - dict[int, tuple[:class:`TensorProxy`, :class:`Bucket`]]: This is for the bucketing in backward.
         """
+        fwd_trace_flat_args, _ = tree_flatten((fwd_trace.args, fwd_trace.kwargs))
+        utils.check(
+            len(self.computation_trc_flat_args) == len(fwd_trace_flat_args),
+            lambda: f"{len(self.computation_trc_flat_args)}, {len(fwd_trace_flat_args)}",
+        )
         if not self.apply_bucketing:
             return fwd_trace
         fsdp_fwd_trace = from_trace(fwd_trace)
@@ -668,12 +678,17 @@ class FSDPCommBucketing:
         Returns:
             - :class:`TraceCtx`
         """
+        fsdp_bwd_trace_flat_out, _ = tree_flatten(fsdp_bwd_trace.output)
+        utils.check(
+            len(self.computation_trc_flat_args) == len(fsdp_bwd_trace_flat_out),
+            lambda: f"{len(self.computation_trc_flat_args)}, {len(fsdp_bwd_trace_flat_out)}",
+        )
 
         if get_skip_data_parallel_grad_sync():
             return stash_unsharded_grads_and_return_none_as_grads(
                 fsdp_bwd_trace,
                 self.compile_data,
-                self.index_in_flat_args_to_param_and_bucket,
+                self.computation_trc_flat_args,
             )
 
         if not self.apply_bucketing:

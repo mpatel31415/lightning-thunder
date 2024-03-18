@@ -67,19 +67,58 @@ def skip_data_parallel_grad_sync() -> None:
         reset_skip_data_parallel_grad_sync(token)
 
 
+@torch.no_grad()
 def _sync_grads(module: torch.nn.Module) -> None:
+    import thunder
+
+    process_group = thunder.compile_data(module).process_group_for_ddp
+    rank: int = tdist.distributed_c10d.get_rank(process_group)
+    world_size: int = process_group.size()
+
     if getattr(module, "use_fsdp", False):
-        return
-    params_with_grad = [p for p in module.parameters() if p.grad is not None]
-    if not params_with_grad:
-        return
-    grads = [p.grad for p in params_with_grad]
-    process_group = module._lc_cd.process_group_for_ddp
-    torch._foreach_div_(grads, process_group.size())
-    with tdist.distributed_c10d._coalescing_manager(group=process_group, async_ops=True) as cm:
-        for g in grads:
-            tdist.distributed_c10d.all_reduce(g)
-    cm.wait()
+
+        def f(p: torch.nn.Parameter) -> torch.Tensor:
+            g = p.unsharded_grad
+            delattr(p, "unsharded_grad")
+            return g
+
+        def prep_output_buffer(g: torch.Tensor, rank: int, world_size: int) -> torch.Tensor:
+            chunk_size = g.size(0) // world_size
+            return g.narrow(0, rank * chunk_size, chunk_size)
+
+        params_with_grad = tuple(
+            filter(
+                lambda p: hasattr(p, "unsharded_grad"),
+                module.parameters(),
+            )
+        )
+        if not params_with_grad:
+            return
+        unsharded_grads = [f(p) for p in params_with_grad]
+        torch._foreach_div_(unsharded_grads, world_size)
+        sharded_grads = [prep_output_buffer(g, rank, world_size) for g in unsharded_grads]
+        for p, g in zip(params_with_grad, sharded_grads):
+            p.grad = g
+        with tdist.distributed_c10d._coalescing_manager(group=process_group, async_ops=True) as cm:
+            for g, out in zip(unsharded_grads, sharded_grads):
+                tdist.distributed_c10d.reduce_scatter_tensor(out, g)
+        cm.wait()
+    elif getattr(module, "use_ddp", False):
+        params_with_grad = [p for p in module.parameters() if p.grad is not None]
+        if not params_with_grad:
+            return
+        grads = [p.grad for p in params_with_grad]
+        torch._foreach_div_(grads, world_size)
+        with tdist.distributed_c10d._coalescing_manager(group=process_group, async_ops=True) as cm:
+            for g in grads:
+                tdist.distributed_c10d.all_reduce(g)
+        cm.wait()
+    else:
+        import warnings
+
+        warnings.warn(
+            "No op since neither `use_ddp` nor `use_fsdp` set. Have you applied either `thunder.distributed.ddp` or `thunder.distributed.fsdp`?"
+        )
 
 
 # TODO Verify parameters are not partially initialized

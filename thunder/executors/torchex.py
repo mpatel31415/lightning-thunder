@@ -1716,6 +1716,19 @@ if torch.distributed.is_available():
         param_name: str,
         compile_data: CompileData,
     ) -> None:
+        from functools import reduce
+
+        # ref: https://discuss.pytorch.org/t/how-to-access-to-a-layer-by-module-name/83797/8
+        def get_module_by_name(module, access_string):
+            names = access_string.split(sep=".")
+            return reduce(getattr, names, module)
+
+        module = get_module_by_name(compile_data.fn, layer_name)
+        param = getattr(module, param_name)
+        if (unsharded_grad := getattr(param, "unsharded_grad")) is not None:
+            unsharded_grad += grad
+        else:
+            setattr(param, "unsharded_grad", grad)
         return
 
     all_gather_prim_impl = ex.register_operator(
