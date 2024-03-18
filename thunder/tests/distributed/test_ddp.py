@@ -529,7 +529,7 @@ class CompileDDPTest(DataParallelTestCase):
             jitted_ddp_m = thunder.jit(
                 ddp_m,
                 cache_mode=CACHE_OPTIONS.CONSTANT_VALUES,
-                executors_list=executors_map[executor].executors_list(),
+                executors=executors_map[executor].executors_list(),
             )
             optimizer = torch.optim.SGD(jitted_ddp_m.parameters(), lr=1e-3)
             return jitted_ddp_m, optimizer
@@ -567,7 +567,7 @@ class CompileDDPTest(DataParallelTestCase):
             jitted_ddp_m = thunder.jit(
                 fsdp_m,
                 cache_mode=CACHE_OPTIONS.CONSTANT_VALUES,
-                executors_list=executors_map[executor].executors_list(),
+                executors=executors_map[executor].executors_list(),
             )
             optimizer = torch.optim.SGD(jitted_ddp_m.parameters(), lr=1e-3)
             return jitted_ddp_m, optimizer
