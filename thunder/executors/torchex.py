@@ -1706,6 +1706,13 @@ if torch.distributed.is_available():
         views[index_of_dst_view].copy_(tensor)
         return tensor
 
+    def _stash_grad_for_fsdp_prim_impl(
+        grad: torch.Tensor,
+        key: str,
+        compile_data: Any,
+    ) -> None:
+        return
+
     all_gather_prim_impl = ex.register_operator(
         "torch_all_gather_prim_impl", meta=dist_prims.all_gather.meta, fn=_all_gather_prim_impl
     )
@@ -1747,6 +1754,16 @@ if torch.distributed.is_available():
     _register_implementation(
         dist_prims.pack_for_fsdp,
         pack_for_fsdp_prim_impl,
+        checker=_always_executable,
+    )
+    stash_grad_for_fsdp_prim_impl = ex.register_operator(
+        "torch_stash_grad_for_fsdp_prim_impl",
+        meta=dist_prims.stash_grad_for_fsdp_meta,
+        fn=_stash_grad_for_fsdp_prim_impl,
+    )
+    _register_implementation(
+        dist_prims.stash_grad_for_fsdp_meta,
+        stash_grad_for_fsdp_prim_impl,
         checker=_always_executable,
     )
 

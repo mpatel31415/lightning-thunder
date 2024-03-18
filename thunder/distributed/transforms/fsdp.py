@@ -368,14 +368,13 @@ def check_num_comm_and_wait(
         utils.check(len(produced_futures) == len(consumed_futures), lambda: msg)
 
 
-def stash_unsharded_grads_and_return_none_as_grads(fsdp_bwd_trace: TraceCtx) -> TraceCtx:
+def stash_unsharded_grads_and_return_none_as_grads(fsdp_bwd_trace: TraceCtx, compile_data) -> TraceCtx:
     orig_bsyms: list[BoundSymbol] = fsdp_bwd_trace.bound_symbols
     producers, consumers = utils.producers_and_consumers(orig_bsyms)
     bsyms_of_unsharded_grad: dict[BoundSymbol, BoundSymbol] = {}
     bsyms_to_skip: dict[BoundSymbol, BoundSymbol] = {}
 
-    flat_outputs, _ = tree_flatten(fsdp_bwd_trace.output)
-    new_flat_outputs = []
+    flat_outputs, output_spec = tree_flatten(fsdp_bwd_trace.output)
     for output_proxy in flat_outputs:
         if isinstance(output_proxy, TensorProxy):
             reduce_scatter_bsym = get_bsym_of_reduce_scatter(output_proxy, producers)
@@ -385,32 +384,25 @@ def stash_unsharded_grads_and_return_none_as_grads(fsdp_bwd_trace: TraceCtx) -> 
 
             bsyms_to_skip[reduce_scatter_bsym] = reduce_scatter_bsym
             bsyms_to_skip[wait_bsym] = wait_bsym
-        new_flat_outputs.append(None)
 
-    bsyms: list[BoundSymbol] = []
-    for bsym in orig_bsyms:
+    def visit(bsym: BoundSymbol) -> VISIT_TYPE:
         if bsym in bsyms_to_skip:
-            continue
+            return VISIT_TYPE.REPLACE
         elif bsym in bsyms_of_unsharded_grad:
-            new_bsym = bsym.from_bsym(**{})
-            new_bsym.sym = new_bsym.sym.with_tags([prims.OpTags.DONT_DCE])
-            bsyms.append(new_bsym)
+            unsharded_grad = bsym.flat_proxy_outs[0]
+            dist_prims.stash_grad_for_fsdp_meta(unsharded_grad, "A", compile_data)
+            return VISIT_TYPE.INSERT_AFTER
         elif bsym.sym.id == prims.PrimIDs.RETURN:
-            # As `nn.Parameter`s cann not have `.grad` attribute of a different shape,
-            # under `skip_grad_sync`, we return `None` instead
-            swap_map = {}
-            for o in bsym.flat_proxy_args + bsym.flat_proxy_outs:
-                swap_map[variableify(o)] = None
-            new_bsym = bsym.from_bsym_swap_proxies(swap_map)
-            assert new_bsym.sym.id == prims.PrimIDs.RETURN
-            bsyms.append(new_bsym)
+            prims.python_return(tree_unflatten([None for _ in flat_outputs], output_spec))
+            return VISIT_TYPE.REPLACE
         else:
-            bsyms.append(bsym)
+            return VISIT_TYPE.NO_OP
 
-    grad_sync_free_trace = from_trace(fsdp_bwd_trace)
-    grad_sync_free_trace.bound_symbols = bsyms
-    assert bsyms[-1].sym.id == prims.PrimIDs.RETURN
-    return grad_sync_free_trace
+    return visitor_transform(
+        fsdp_bwd_trace,
+        visit,
+        provenance="Trace without grad sync",
+    )
 
 
 class FSDPCommBucketing:
@@ -668,7 +660,7 @@ class FSDPCommBucketing:
         """
 
         if get_skip_data_parallel_grad_sync():
-            return stash_unsharded_grads_and_return_none_as_grads(fsdp_bwd_trace)
+            return stash_unsharded_grads_and_return_none_as_grads(fsdp_bwd_trace, self.compile_data)
 
         if not self.apply_bucketing:
             return fsdp_bwd_trace
