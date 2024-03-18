@@ -1725,7 +1725,7 @@ if torch.distributed.is_available():
 
         module = get_module_by_name(compile_data.fn, layer_name)
         param = getattr(module, param_name)
-        if (unsharded_grad := getattr(param, "unsharded_grad")) is not None:
+        if torch.is_tensor(unsharded_grad := getattr(param, "unsharded_grad")):
             unsharded_grad += grad
         else:
             setattr(param, "unsharded_grad", grad)
