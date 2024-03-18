@@ -76,15 +76,13 @@ def _sync_grads(module: torch.nn.Module) -> None:
     world_size: int = process_group.size()
 
     if getattr(module, "use_fsdp", False):
+        from thunder.executors.torchex import _pack_for_fsdp_prim_impl
+        from thunder.executors.torchex import _unpack_for_fsdp_prim_impl
 
         def f(p: torch.nn.Parameter) -> torch.Tensor:
             g = p.unsharded_grad
             delattr(p, "unsharded_grad")
             return g
-
-        def prep_output_buffer(g: torch.Tensor, rank: int, world_size: int) -> torch.Tensor:
-            chunk_size = g.size(0) // world_size
-            return g.narrow(0, rank * chunk_size, chunk_size)
 
         params_with_grad = tuple(
             filter(
@@ -98,18 +96,24 @@ def _sync_grads(module: torch.nn.Module) -> None:
         grouped_param_and_grad = torch._group_tensors_by_device_and_dtype(
             (params_with_grad, unsharded_grads), with_indices=False
         )
-        unsharded_to_sharded = {}
+        bucket_to_output = {}
+        param_to_sharded_grad = {}
 
         for (grouped_params, grouped_unsharded_grads), _ in grouped_param_and_grad.values():
             torch._foreach_div_(grouped_unsharded_grads, world_size)
-            grouped_sharded_grads = [prep_output_buffer(g, rank, world_size) for g in unsharded_grads]
-            for p, unsharded_g, sharded_g in zip(grouped_params, grouped_unsharded_grads, grouped_sharded_grads):
-                p.grad = sharded_g
-                unsharded_to_sharded[unsharded_g] = sharded_g
+            bucket = _pack_for_fsdp_prim_impl(grouped_sharded_grads, world_size, "scatter")
+            chunk_size = bucket.size(0) // world_size
+            output = bucket.narrow(0, rank * chunk_size, chunk_size)
+            grouped_sharded_grads = _unpack_for_fsdp_prim_impl(bucket, grouped_sharded_grads, world_size, "scatter")
+            for p, sharded_g in zip(grouped_params, grouped_sharded_grads):
+                param_to_sharded_grad[p] = sharded_g
+            bucket_to_output[bucket] = output
         with tdist.distributed_c10d._coalescing_manager(group=process_group, async_ops=True) as cm:
-            for unsharded_g, sharded_g in unsharded_to_sharded.items():
-                tdist.distributed_c10d.reduce_scatter_tensor(sharded_g, unsharded_g)
+            for bucket, output in bucket_to_output.items():
+                tdist.distributed_c10d.reduce_scatter_tensor(output, bucket)
         cm.wait()
+        for p, g in param_to_sharded_grad.items():
+            p.grad = g
     elif getattr(module, "use_ddp", False):
         params_with_grad = [p for p in module.parameters() if p.grad is not None]
         if not params_with_grad:

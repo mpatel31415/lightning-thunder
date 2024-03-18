@@ -1723,12 +1723,13 @@ if torch.distributed.is_available():
             names = access_string.split(sep=".")
             return reduce(getattr, names, module)
 
+        grad_name = "unsharded_grad"
         module = get_module_by_name(compile_data.fn, layer_name)
         param = getattr(module, param_name)
-        if torch.is_tensor(unsharded_grad := getattr(param, "unsharded_grad")):
+        if torch.is_tensor(unsharded_grad := getattr(param, grad_name)):
             unsharded_grad += grad
         else:
-            setattr(param, "unsharded_grad", grad)
+            setattr(param, grad_name, grad)
         return
 
     all_gather_prim_impl = ex.register_operator(
