@@ -141,28 +141,6 @@ class Symbol:
     # An optional postprocessing function to modify the bound symbol resulting from bind()
     _bind_postprocess: None | Callable = None
 
-    def with_tags(self, tags: list[Any]) -> Symbol:
-        _tags = self.tags
-        if _tags is None:
-            _tags = tags
-        else:
-            assert isinstance(_tags, list)
-            _tags += tags
-        return Symbol(
-            name=self.name,
-            meta=self.meta,
-            id=self.id,
-            is_prim=self.is_prim,
-            tags=_tags,
-            is_fusion=self.is_fusion,
-            python_printer=self.python_printer,
-            _module=self._module,
-            _hash=self._hash,
-            executor=self.executor,
-            python_impl=self.python_impl,
-            _print_as_impl=self._print_as_impl,
-        )
-
     @property
     def __name__(self):
         return self.name
