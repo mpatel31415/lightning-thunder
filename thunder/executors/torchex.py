@@ -1731,11 +1731,7 @@ if torch.distributed.is_available():
         else:
             setattr(param, grad_name, grad)
 
-        process_group = compile_data.process_group_for_ddp
-        world_size = process_group.size()
-        chunk_size = grad.size(0) // world_size
-        rank = torch.distributed.get_rank(process_group)
-        return grad.narrow(0, rank * chunk_size, chunk_size)
+        return grad
 
     all_gather_prim_impl = ex.register_operator(
         "torch_all_gather_prim_impl", meta=dist_prims.all_gather.meta, fn=_all_gather_prim_impl

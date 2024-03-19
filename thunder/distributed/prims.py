@@ -250,6 +250,8 @@ def update_bucket_view_meta(tensor: TensorProxy, index_of_dst_view: int, bucket_
     return TensorProxy(like=tensor)
 
 
+# [NOTE - shape of output]
+# `ThunderFunction.backward` replaces outputs of this function with None, so the shape wouldn't matter a lot.
 def stash_grad_for_fsdp_meta(
     grad: TensorProxy,
     layer_name: str,
@@ -262,9 +264,7 @@ def stash_grad_for_fsdp_meta(
     utils.check_type(layer_name, str)
     utils.check_type(param_name, str)
     utils.check_type(compile_data, CompileData)
-    shape = list(grad.shape)
-    shape[0] //= compile_data.process_group_for_ddp.size()
-    return TensorProxy(like=grad, shape=shape)
+    return TensorProxy(like=grad)
 
 
 all_gather = make_prim(PrimIDs.ALL_GATHER, "all_gather", meta=all_gather_meta)
