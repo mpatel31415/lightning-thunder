@@ -97,7 +97,7 @@ def _sync_grads(module: torch.nn.Module) -> None:
         )
 
 
-# TODO(crcrpar): Try `torch.optim.Optimizer._group_tensors_by_device_and_dtype` and bucketing
+# TODO(crcrpar): Try `torch.optim.Optimizer._group_tensors_by_device_and_dtype` and bucketing after checking the memory footprint
 def _sync_grad_fsdp(
     module: torch.nn.Module | ThunderModule,
     *,

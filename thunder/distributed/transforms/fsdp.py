@@ -373,6 +373,20 @@ def stash_unsharded_grads_and_return_none_as_grads(
     compile_data: CompileData,
     computation_trc_flat_args: list[Proxy],
 ) -> TraceCtx:
+    """Set or accumulate unsharded grads to ``param._thunder_fsdp_unsharded_grad``
+
+    This function removes :func:`~thunder.distributed.prims.reduce_scatter`s and following :func:`~thunder.distributed.prims.wait`
+    and inserts :func:`~thunder.distributed.prims.stash_grad_for_fsdp` so that the unsharded gradients are stored and accumulated
+    when :class:`~thunder.ThunderModule` is called in the context of :func:`~thunder.ThunderModule.no_sync`.
+
+    Args:
+        fsdp_bwd_trace:
+        compile_data:
+        computation_trc_flat_args:
+
+    Returns:
+        - TraceCtx
+    """
     producers, consumers = utils.producers_and_consumers(fsdp_bwd_trace)
     bsyms_of_unsharded_grad: dict[BoundSymbol, tuple[int, str, str]] = {}
     bsyms_to_skip: dict[BoundSymbol, BoundSymbol] = {}

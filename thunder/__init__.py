@@ -205,11 +205,16 @@ class ThunderModule(pytorch.nn.Module):
 
         .. note::
 
-            This could lead to different accumulated gradients with ``torch.nn.parallel.distributed.DistributedDataParallel.no_sync``.
+            [ddp] This could lead to different accumulated gradients with ``torch.nn.parallel.distributed.DistributedDataParallel.no_sync``.
             PyTorch's gradient synchronization is implemented by applying all-reduce to gradient buckets of ``torch.nn.Parameter.grad``.
             Thus the ``no_sync`` context leads to :math:`\text{AllReduce} \left( \sum_{i = 0}^{\rm{num_grad_accum_steps}} g_i \right)`.
             In contrast, this synchronizes accumulated gradients when exiting, leading to
             :math:`\text{AllReduce} \left( \sum_{i = 0}^{\rm{num_grad_accum_steps - 1}} g_i \right) + \text{AllReduce}(g_{\rm{num_grad_accum_steps}})`.
+
+        .. note::
+
+            [fsdp] This sets and accumulates unsharded, unsynchronized gradients to ``param._thunder_fsdp_unsharded_grad`` until exiting this context.
+            When exiting, :func:`~thunder.distributed._sync_grad_fsdp` collects and synchronize those attributes before setting the outputs as ``param.grad``.
 
         .. warning::
 
