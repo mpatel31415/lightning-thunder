@@ -664,6 +664,7 @@ class FSDPCommBucketing:
         check_num_comm_and_wait(updated_bwd_trace, _ALL_GATHER_SYM_IDS | _REDUCE_SCATTER_SYM_IDS)
         return updated_bwd_trace
 
+    # TODO(crcrpar): Rename this method as this does processing for not only bucketing but also `no_sync`
     def apply_bucketing_to_backward_trace(self, fsdp_bwd_trace: TraceCtx) -> TraceCtx:
         """Apply bucketing to reduce_scatter in fsdp bwd trace.
 
@@ -689,6 +690,8 @@ class FSDPCommBucketing:
         )
 
         if get_skip_data_parallel_grad_sync():
+            if self.requires_bwd_bucketing_allgather:
+                fsdp_bwd_trace = self._apply_bucketing_to_backward_all_gather(fsdp_bwd_trace)
             return stash_unsharded_grads_and_return_none_as_grads(
                 fsdp_bwd_trace,
                 self.compile_data,
