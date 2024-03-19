@@ -1723,7 +1723,7 @@ if torch.distributed.is_available():
             names = access_string.split(sep=".")
             return reduce(getattr, names, module)
 
-        grad_name = "unsharded_grad"
+        grad_name = "_thunder_fsdp_unsharded_grad"
         module = get_module_by_name(compile_data.fn, layer_name)
         param = getattr(module, param_name)
         if torch.is_tensor(unsharded_grad := getattr(param, grad_name, None)):

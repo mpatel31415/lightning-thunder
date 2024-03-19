@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 from itertools import chain
 from contextlib import contextmanager
@@ -14,6 +15,7 @@ import thunder.core.utils as utils
 from thunder.core.proxies import DDPType
 
 if TYPE_CHECKING:
+    from thunder import ThunderModule
     from torch.distributed import ProcessGroup
 
 __all__ = [
@@ -70,51 +72,13 @@ def skip_data_parallel_grad_sync() -> None:
 @torch.no_grad()
 def _sync_grads(module: torch.nn.Module) -> None:
     import thunder
-    from torch.optim import Optimizer
 
     process_group = thunder.compile_data(module).process_group_for_ddp
     rank: int = tdist.distributed_c10d.get_rank(process_group)
     world_size: int = process_group.size()
 
     if getattr(module, "use_fsdp", False):
-        from thunder.executors.torchex import _pack_for_fsdp_prim_impl
-        from thunder.executors.torchex import _unpack_for_fsdp_prim_impl
-
-        def f(p: torch.nn.Parameter) -> torch.Tensor:
-            g = p.unsharded_grad
-            delattr(p, "unsharded_grad")
-            return g
-
-        params_with_grad = tuple(
-            filter(
-                lambda p: hasattr(p, "unsharded_grad"),
-                module.parameters(),
-            )
-        )
-        if not params_with_grad:
-            return
-        unsharded_grads = [f(p) for p in params_with_grad]
-        grouped_param_and_grad = Optimizer._group_tensors_by_device_and_dtype(
-            (params_with_grad, unsharded_grads), with_indices=False
-        )
-        bucket_to_output = {}
-        param_to_sharded_grad = {}
-
-        for (grouped_params, grouped_unsharded_grads), _ in grouped_param_and_grad.values():
-            torch._foreach_div_(grouped_unsharded_grads, world_size)
-            bucket = _pack_for_fsdp_prim_impl(grouped_unsharded_grads, world_size, "scatter")
-            chunk_size = bucket.size(0) // world_size
-            output = bucket.narrow(0, rank * chunk_size, chunk_size)
-            grouped_sharded_grads = _unpack_for_fsdp_prim_impl(bucket, grouped_unsharded_grads, world_size, "scatter")
-            for p, sharded_g in zip(grouped_params, grouped_sharded_grads):
-                param_to_sharded_grad[p] = sharded_g
-            bucket_to_output[bucket] = output
-        with tdist.distributed_c10d._coalescing_manager(group=process_group, async_ops=True) as cm:
-            for bucket, output in bucket_to_output.items():
-                tdist.distributed_c10d.reduce_scatter_tensor(output, bucket)
-        cm.wait()
-        for p, g in param_to_sharded_grad.items():
-            p.grad = g
+        _sync_grad_fsdp(module=module, process_group=process_group, rank=rank, world_size=world_size)
     elif getattr(module, "use_ddp", False):
         params_with_grad = [p for p in module.parameters() if p.grad is not None]
         if not params_with_grad:
@@ -131,6 +95,32 @@ def _sync_grads(module: torch.nn.Module) -> None:
         warnings.warn(
             "No op since neither `use_ddp` nor `use_fsdp` set. Have you applied either `thunder.distributed.ddp` or `thunder.distributed.fsdp`?"
         )
+
+
+# TODO(crcrpar): Try `torch.optim.Optimizer._group_tensors_by_device_and_dtype` and bucketing
+def _sync_grad_fsdp(
+    module: torch.nn.Module | ThunderModule,
+    *,
+    process_group: ProcessGroup,
+    rank: int,
+    world_size: int,
+) -> None:
+    def prep_shard(g: torch.Tensor, rank: int, world_size: int) -> torch.Tensor:
+        chunk_size = g.size(0) // world_size
+        return g.narrow(0, rank * chunk_size, chunk_size)
+
+    params_with_grad = tuple(filter(lambda p: hasattr(p, "_thunder_fsdp_unsharded_grad"), module.parameters()))
+    if not params_with_grad:
+        return
+    unsharded_grads = [p._thunder_fsdp_unsharded_grad for p in params_with_grad]
+    sharded_grads = [prep_shard(g, rank, world_size) for g in unsharded_grads]
+    with tdist.distributed_c10d._coalescing_manager(group=process_group, async_ops=True) as cm:
+        for u, s in zip(unsharded_grads, sharded_grads):
+            tdist.distributed_c10d.reduce_scatter_tensor(s, u, op=tdist.distributed_c10d.ReduceOp.AVG)
+    cm.wait()
+    for p, g in zip(params_with_grad, sharded_grads):
+        p.grad = g
+        del p._thunder_fsdp_unsharded_grad
 
 
 # TODO Verify parameters are not partially initialized
@@ -422,7 +412,7 @@ def fsdp(
 
 @torch.no_grad()
 def _shard_params(
-    module: torch.nn.Module, process_group: "ProcessGroup", device: torch.device | None, broadcast_from: int | None
+    module: torch.nn.Module, process_group: ProcessGroup, device: torch.device | None, broadcast_from: int | None
 ) -> None:
     """Shards the parameters on the first dimension."""
     global_rank = tdist.get_rank(group=process_group)
@@ -472,7 +462,7 @@ def _shard_param(param: torch.Tensor, rank: int, world_size: int, name: str) -> 
 
 
 @torch.no_grad()
-def _unshard_params(module: torch.nn.Module, process_group: "ProcessGroup", cpu_offload: bool = False) -> None:
+def _unshard_params(module: torch.nn.Module, process_group: ProcessGroup, cpu_offload: bool = False) -> None:
     """Unshard a module's parameters.
 
     This supports CPU offloading of parameters.
