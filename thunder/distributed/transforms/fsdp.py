@@ -374,7 +374,7 @@ def stash_unsharded_grads_and_return_none_as_grads(
     computation_trc_flat_args: list[Proxy],
 ) -> TraceCtx:
     producers, consumers = utils.producers_and_consumers(fsdp_bwd_trace)
-    bsyms_of_unsharded_grad: dict[BoundSymbol, tuple[str, str]] = {}
+    bsyms_of_unsharded_grad: dict[BoundSymbol, tuple[int, str, str]] = {}
     bsyms_to_skip: dict[BoundSymbol, BoundSymbol] = {}
 
     flat_outputs, output_spec = tree_flatten(fsdp_bwd_trace.output)
@@ -392,18 +392,22 @@ def stash_unsharded_grads_and_return_none_as_grads(
             chunked_param_name = param.name.split("_")
             layer_name = ".".join(chunked_param_name[1:-1])
             param_name = chunked_param_name[-1]
-            bsyms_of_unsharded_grad[prod_of_unsharded_grad] = (layer_name, param_name)
+            bsyms_of_unsharded_grad[prod_of_unsharded_grad] = (index, layer_name, param_name)
+
+    index_to_new_grad = {}
 
     def visit(bsym: BoundSymbol) -> VISIT_TYPE:
         if bsym in bsyms_to_skip:
             return VISIT_TYPE.REPLACE
         elif bsym in bsyms_of_unsharded_grad:
             unsharded_grad = bsym.flat_proxy_outs[0]
-            layer_name, param_name = bsyms_of_unsharded_grad[bsym]
-            dist_prims.stash_grad_for_fsdp_meta(unsharded_grad, layer_name, param_name, compile_data)
+            index, layer_name, param_name = bsyms_of_unsharded_grad[bsym]
+            stashed_grad = dist_prims.stash_grad_for_fsdp(unsharded_grad, layer_name, param_name, compile_data)
+            index_to_new_grad[index] = stashed_grad
             return VISIT_TYPE.INSERT_AFTER
         elif bsym.sym.id == prims.PrimIDs.RETURN:
-            prims.python_return(tree_unflatten([None for _ in flat_outputs], output_spec))
+            new_return_args = [index_to_new_grad.get(i, g) for i, g in enumerate(flat_outputs)]
+            prims.python_return(tree_unflatten(new_return_args, output_spec))
             return VISIT_TYPE.REPLACE
         else:
             return VISIT_TYPE.NO_OP
