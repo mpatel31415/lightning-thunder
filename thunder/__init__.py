@@ -289,6 +289,7 @@ CacheEntry = namedtuple(
         "epilogue_traces",
         "backward_fn",
         "backward_traces",
+        "return_none_as_grads",
     ],
 )
 
@@ -393,13 +394,15 @@ def jit(
 
         cache_info["is_autocast_enabled"] = is_autocast_enabled
 
-        is_ddp_or_fsdp_enabled = getattr(fn, "use_ddp", False) or getattr(fn, "use_fsdp", False)
+        is_ddp_enabled = getattr(fn, "use_ddp", False)
+        is_fsdp_enabled = getattr(fn, "use_fsdp", False)
         no_grad_sync = False
-        if is_ddp_or_fsdp_enabled:
+        if is_ddp_enabled or is_fsdp_enabled:
             from thunder.distributed import get_skip_data_parallel_grad_sync
 
             no_grad_sync = get_skip_data_parallel_grad_sync()
         cache_info["no_grad_sync"] = no_grad_sync
+        return_none_as_grads = no_grad_sync and is_fsdp_enabled
 
         # TODO RC1 Add module and function checks to prologue (make it a compile option)
 
@@ -416,6 +419,7 @@ def jit(
                     epilogue_traces,
                     backward_fn,
                     backward_traces,
+                    _return_none_as_grads,
                 ) = cache_entry
                 try:
                     cs.last_prologue_execution_start = time.time_ns()
@@ -583,7 +587,15 @@ def jit(
 
             # TODO RC1 Update the cache
             cache_entry = CacheEntry(
-                pro, protraces, comp, extraces, epilogue, epilogue_traces, backward_fn, backward_traces
+                pro,
+                protraces,
+                comp,
+                extraces,
+                epilogue,
+                epilogue_traces,
+                backward_fn,
+                backward_traces,
+                return_none_as_grads=return_none_as_grads,
             )
             if cd.cache_option is not CACHE_OPTIONS.NO_CACHING:
                 cs.interpreter_cache.append(cache_entry)
@@ -618,6 +630,7 @@ def jit(
 
             # Connect produced tensors with PyTorch's autograd graph
             ThunderFunction.apply(
+                cache_entry.return_none_as_grads,
                 cache_entry.backward_fn,
                 saved_tensors,
                 saved_other,

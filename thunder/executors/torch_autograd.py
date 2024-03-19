@@ -43,10 +43,11 @@ class ThunderFunction(torch.autograd.Function):
         return split_forward_backward_compat
 
     @staticmethod
-    def forward(ctx, compiled_backward, saved_tensors, saved_other, flat_output, *flat_args):
+    def forward(ctx, return_none_as_grads, compiled_backward, saved_tensors, saved_other, flat_output, *flat_args):
         # Here we just propagate the tensors through the autograd graph
         ctx.saved_other = saved_other
         ctx.compiled_backward = compiled_backward
+        ctx.return_none_as_grads = return_none_as_grads
 
         # We must save tensors using ctx.save_for_backward
         ctx.save_for_backward(*saved_tensors)
@@ -75,7 +76,11 @@ class ThunderFunction(torch.autograd.Function):
 
         # Inside the compiled backward we must clear the saved_tensors_list
         assert not saved_tensors_list, "saved_tensors_list must be empty after calling compiled_backward"
-        return (None, None, None, None, *grads)
+        return (
+            (None, None, None, None, None, *grads)
+            if not ctx.return_none_as_grads
+            else (None, None, None, None, None, *([None] * len(grads)))
+        )
 
 
 # TODO: RC1 Remove this
