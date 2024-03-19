@@ -70,6 +70,7 @@ def skip_data_parallel_grad_sync() -> None:
 @torch.no_grad()
 def _sync_grads(module: torch.nn.Module) -> None:
     import thunder
+    from torch.optim import Optimizer
 
     process_group = thunder.compile_data(module).process_group_for_ddp
     rank: int = tdist.distributed_c10d.get_rank(process_group)
@@ -93,7 +94,7 @@ def _sync_grads(module: torch.nn.Module) -> None:
         if not params_with_grad:
             return
         unsharded_grads = [f(p) for p in params_with_grad]
-        grouped_param_and_grad = torch._group_tensors_by_device_and_dtype(
+        grouped_param_and_grad = Optimizer._group_tensors_by_device_and_dtype(
             (params_with_grad, unsharded_grads), with_indices=False
         )
         bucket_to_output = {}
