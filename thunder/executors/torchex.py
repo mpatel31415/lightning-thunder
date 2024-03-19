@@ -1777,11 +1777,11 @@ if torch.distributed.is_available():
     )
     stash_grad_for_fsdp_prim_impl = ex.register_operator(
         "torch_stash_grad_for_fsdp_prim_impl",
-        meta=dist_prims.stash_grad_for_fsdp_meta,
+        meta=dist_prims.stash_grad_for_fsdp.meta,
         fn=_stash_grad_for_fsdp_prim_impl,
     )
     _register_implementation(
-        dist_prims.stash_grad_for_fsdp_meta,
+        dist_prims.stash_grad_for_fsdp,
         stash_grad_for_fsdp_prim_impl,
         checker=_always_executable,
     )

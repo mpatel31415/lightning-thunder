@@ -276,7 +276,7 @@ pack_for_fsdp = make_prim(PrimIDs.PACK_FOR_FSDP, "pack_for_fsdp", meta=pack_for_
 unpack = make_prim(PrimIDs.UNPACK, "unpack", meta=unpack_meta)
 unpack_for_fsdp = make_prim(PrimIDs.UNPACK_FOR_FSDP, "unpack_for_fsdp", meta=unpack_for_fsdp_meta)
 update_bucket_view = make_prim(PrimIDs.UPDATE_BUCKET_VIEW, "update_bucket_view", meta=update_bucket_view_meta)
-stash_grad_for_fsdp_meta = make_prim(
+stash_grad_for_fsdp = make_prim(
     PrimIDs.STASH_GRAD_FOR_FSDP,
     "stash_grad_for_fsdp",
     meta=stash_grad_for_fsdp_meta,
