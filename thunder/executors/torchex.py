@@ -1726,11 +1726,16 @@ if torch.distributed.is_available():
         grad_name = "unsharded_grad"
         module = get_module_by_name(compile_data.fn, layer_name)
         param = getattr(module, param_name)
-        if torch.is_tensor(unsharded_grad := getattr(param, grad_name)):
+        if torch.is_tensor(unsharded_grad := getattr(param, grad_name, None)):
             unsharded_grad += grad
         else:
             setattr(param, grad_name, grad)
-        return
+
+        process_group = compile_data.process_group_for_ddp
+        world_size = process_group.size()
+        chunk_size = grad.size(0) // world_size
+        rank = torch.distributed.get_rank(process_group)
+        return grad.narrow(0, rank * chunk_size, chunk_size)
 
     all_gather_prim_impl = ex.register_operator(
         "torch_all_gather_prim_impl", meta=dist_prims.all_gather.meta, fn=_all_gather_prim_impl
