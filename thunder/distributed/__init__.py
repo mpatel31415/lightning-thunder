@@ -102,10 +102,10 @@ def _sync_grads(module: torch.nn.Module) -> None:
 
         for (grouped_params, grouped_unsharded_grads), _ in grouped_param_and_grad.values():
             torch._foreach_div_(grouped_unsharded_grads, world_size)
-            bucket = _pack_for_fsdp_prim_impl(grouped_sharded_grads, world_size, "scatter")
+            bucket = _pack_for_fsdp_prim_impl(grouped_unsharded_grads, world_size, "scatter")
             chunk_size = bucket.size(0) // world_size
             output = bucket.narrow(0, rank * chunk_size, chunk_size)
-            grouped_sharded_grads = _unpack_for_fsdp_prim_impl(bucket, grouped_sharded_grads, world_size, "scatter")
+            grouped_sharded_grads = _unpack_for_fsdp_prim_impl(bucket, grouped_unsharded_grads, world_size, "scatter")
             for p, sharded_g in zip(grouped_params, grouped_sharded_grads):
                 param_to_sharded_grad[p] = sharded_g
             bucket_to_output[bucket] = output
