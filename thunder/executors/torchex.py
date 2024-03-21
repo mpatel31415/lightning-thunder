@@ -1712,20 +1712,11 @@ if torch.distributed.is_available():
 
     def _stash_grad_for_fsdp_prim_impl(
         grad: torch.Tensor,
-        layer_name: str,
-        param_name: str,
+        param_fqn: str,
         compile_data: CompileData,
     ) -> None:
-        from functools import reduce
-
-        # ref: https://discuss.pytorch.org/t/how-to-access-to-a-layer-by-module-name/83797/8
-        def get_module_by_name(module, access_string):
-            names = access_string.split(sep=".")
-            return reduce(getattr, names, module)
-
         grad_name = "_thunder_fsdp_unsharded_grad"
-        module = get_module_by_name(compile_data.fn, layer_name)
-        param = getattr(module, param_name)
+        param = compile_data.fn.get_parameter(param_fqn)
         if torch.is_tensor(unsharded_grad := getattr(param, grad_name, None)):
             unsharded_grad += grad
         else:

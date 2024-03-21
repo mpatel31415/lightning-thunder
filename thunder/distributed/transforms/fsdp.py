@@ -372,6 +372,7 @@ def stash_unsharded_grads_and_return_none_as_grads(
     fsdp_bwd_trace: TraceCtx,
     compile_data: CompileData,
     computation_trc_flat_args: list[Proxy],
+    proxy_name_to_fqn: dict[str, str],
 ) -> TraceCtx:
     """Set or accumulate unsharded grads to ``param._thunder_fsdp_unsharded_grad``
 
@@ -388,7 +389,7 @@ def stash_unsharded_grads_and_return_none_as_grads(
         - TraceCtx
     """
     producers, consumers = utils.producers_and_consumers(fsdp_bwd_trace)
-    bsyms_of_unsharded_grad: dict[BoundSymbol, tuple[int, str, str]] = {}
+    bsyms_of_unsharded_grad_to_index_and_fqn_of_param: dict[BoundSymbol, tuple[int, str]] = {}
     bsyms_to_skip: dict[BoundSymbol, BoundSymbol] = {}
 
     flat_outputs, output_spec = tree_flatten(fsdp_bwd_trace.output)
@@ -403,20 +404,18 @@ def stash_unsharded_grads_and_return_none_as_grads(
 
             param = computation_trc_flat_args[index]
             utils.check_type(param, TensorProxy)
-            chunked_param_name = param.name.split("_")
-            layer_name = ".".join(chunked_param_name[1:-1])
-            param_name = chunked_param_name[-1]
-            bsyms_of_unsharded_grad[prod_of_unsharded_grad] = (index, layer_name, param_name)
+            param_fqn = proxy_name_to_fqn[param.name]
+            bsyms_of_unsharded_grad_to_index_and_fqn_of_param[prod_of_unsharded_grad] = (index, param_fqn)
 
     index_to_new_grad = {}
 
     def visit(bsym: BoundSymbol) -> VISIT_TYPE:
         if bsym in bsyms_to_skip:
             return VISIT_TYPE.REPLACE
-        elif bsym in bsyms_of_unsharded_grad:
+        elif bsym in bsyms_of_unsharded_grad_to_index_and_fqn_of_param:
             unsharded_grad = bsym.flat_proxy_outs[0]
-            index, layer_name, param_name = bsyms_of_unsharded_grad[bsym]
-            stashed_grad = dist_prims.stash_grad_for_fsdp(unsharded_grad, layer_name, param_name, compile_data)
+            index, param_fqn = bsyms_of_unsharded_grad_to_index_and_fqn_of_param[bsym]
+            stashed_grad = dist_prims.stash_grad_for_fsdp(unsharded_grad, param_fqn, compile_data)
             index_to_new_grad[index] = stashed_grad
             return VISIT_TYPE.INSERT_AFTER
         elif bsym.sym.id == prims.PrimIDs.RETURN:
@@ -466,6 +465,23 @@ class FSDPCommBucketing:
         self.computation_trc_flat_args, self._computation_trc_flat_args_spec = tree_flatten(
             (self.computation_trc.args, self.computation_trc.kwargs)
         )
+        rev_fqn_to_proxy_name: dict[str, str] = {}
+        fqn: str
+        for fqn, _ in compile_data.fn.named_parameters():
+            proxy_name = fqn.replace(".", "_")
+            rev_fqn_to_proxy_name[proxy_name] = fqn
+
+        orig_proxy_name_to_fqn: dict[str, str] = {}
+        for proxy_name in tuple(
+            p.name for p in filter(lambda p: isinstance(p, TensorProxy), self.computation_trc_flat_args)
+        ):
+            if proxy_name in rev_fqn_to_proxy_name:
+                orig_proxy_name_to_fqn[proxy_name] = rev_fqn_to_proxy_name[proxy_name]
+            elif proxy_name.startswith("t_"):
+                tmp_name = proxy_name[2:]
+                if tmp_name in rev_fqn_to_proxy_name:
+                    orig_proxy_name_to_fqn[proxy_name] = rev_fqn_to_proxy_name[tmp_name]
+        self.proxy_name_to_fqn = orig_proxy_name_to_fqn
 
     def update_name_set(self, backward_trace: TraceCtx) -> TraceCtx:
         if not self.apply_bucketing:
@@ -710,6 +726,7 @@ class FSDPCommBucketing:
                 fsdp_bwd_trace,
                 self.compile_data,
                 self.computation_trc_flat_args,
+                self.proxy_name_to_fqn,
             )
 
         if not self.apply_bucketing:

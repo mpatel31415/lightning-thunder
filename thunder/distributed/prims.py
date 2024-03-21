@@ -254,15 +254,13 @@ def update_bucket_view_meta(tensor: TensorProxy, index_of_dst_view: int, bucket_
 # `ThunderFunction.backward` replaces outputs of this function with None, so the shape wouldn't matter a lot.
 def stash_grad_for_fsdp_meta(
     grad: TensorProxy,
-    layer_name: str,
-    param_name: str,
+    param_fqn: str,
     compile_data: CompileData,
 ) -> None:
     from thunder.common import CompileData
 
     utils.check_type(grad, TensorProxy)
-    utils.check_type(layer_name, str)
-    utils.check_type(param_name, str)
+    utils.check_type(param_fqn, str)
     utils.check_type(compile_data, CompileData)
     return TensorProxy(like=grad)
 
