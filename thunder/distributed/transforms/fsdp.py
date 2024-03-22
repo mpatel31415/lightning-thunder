@@ -433,13 +433,21 @@ def stash_unsharded_grads_and_return_none_as_grads(
 
 
 class FSDPCommBucketing:
-    """Apply communication bucketing to FSDP traces.
+    """Apply transformations to FSDP forward/backward traces.
 
-    This class is in charge of introducing bucketing into the FSDP traces.
+    This class is in charge of
+    - introducing bucketing into the FSDP traces.
+    - modifying an FSDP backward trace by removing gradient sync's when
+      :func:`~thunder.distributed.get_skip_data_parallel_grad_sync` is :obj:`True`.
+
     A given forward trace will be updated so that it has fewer ``AllGather``'s by
     concatenating sharded parameters beforehand and slicing and reshaping unsharded concatenated parameters afterward.
     The backward trace, the counterpart of the forward, will be updated so that it has fewer ``ReduceScatter``'s.
     ``AllGather``s are also updated if ``sharding_strategy`` is ``FSDPType.ZERO3``.
+
+    When :func:`~thunder.ThunderModule.no_sync` is used, this removes :class:`~thunder.core.symbol.BoundSymbol`s of
+    :func:`~thunder.distributed.prims.reduce_scatter` and :func:`~thunder.distributed.prims.wait`,
+    and inserts ones to attach or accumulate unsharded, unsynchronized gradients to parameters as ``_thunder_fsdp_unsharded_grad`` attr.
 
     """
 
