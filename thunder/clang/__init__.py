@@ -1181,6 +1181,13 @@ def matrix_transpose(a: TensorProxy) -> TensorProxy:
                 [2, 5],
                 [3, 6]])
     """
+
+
+    if a.ndim == 0:
+        return a
+    elif a.ndim == 1:
+        raise RuntimeError(f"tensor.mT is only supported on matrices or batches of matrices. Got 1-D tensor.")
+
     dim0, dim1 = -2, -1
     dim0, dim1 = utils.canonicalize_dims(a.ndim, (dim0, dim1))
     permutation = list(range(a.ndim))
