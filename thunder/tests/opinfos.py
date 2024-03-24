@@ -3947,6 +3947,7 @@ def matrix_transpose_sample_generator(op, device, dtype, requires_grad, **kwargs
 
     # shape
     cases = (
+        (),
         (2, 3),
         (2, 3, 4),
         (2, 3, 4, 2),
@@ -3959,14 +3960,8 @@ def matrix_transpose_error_generator(op, device, dtype=torch.float32, **kwargs):
     make = partial(make_tensor, device=device, dtype=dtype)
 
     # shape, error type, error message
-    RuntimeError(f"tensor.mT is only supported on matrices or batches of matrices. Got 1-D tensor.")
     cases = (
-        ((4, 5, 6), RuntimeError, r"t\(\) expects a tensor with <= 2 dimensions, but self is 3D"),
-        (
-            (4, 5, 6, 7),
-            RuntimeError,
-            r"t\(\) expects a tensor with <= 2 dimensions, but self is 4D",
-        ),
+        ((3), RuntimeError, "tensor.mT is only supported on matrices or batches of matrices. Got 1-D tensor."),
     )
 
     for shape, err_type, err_msg in cases:
@@ -3976,6 +3971,7 @@ def matrix_transpose_error_generator(op, device, dtype=torch.float32, **kwargs):
 transpose_opinfo = OpInfo(
     clang.matrix_transpose,
     sample_input_generator=matrix_transpose_sample_generator,
+    error_input_generator=matrix_transpose_error_generator,
     torch_reference=lambda x: x.mT,
 )
 shape_ops.append(transpose_opinfo)
