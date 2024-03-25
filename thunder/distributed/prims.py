@@ -285,8 +285,21 @@ def synchronize_augmented_forward_rule(
 
 @register_backward(PrimIDs.SYNCHRONIZE)
 def synchronize_backward_rule(
-    ddp_type: DDPType, group: torch.distributed.ProcessGroup, grad: TensorProxy
+    ddp_type: DDPType,
+    group: torch.distributed.ProcessGroup,
+    grad: TensorProxy,
 ) -> tuple[TensorProxy, None]:
+    from thunder.distributed import get_skip_data_parallel_grad_sync
+
+    if get_skip_data_parallel_grad_sync():
+        match ddp_type:
+            case DDPType.REPLICATED:
+                return grad, None
+            case DDPType.FULLY_SHARDED:
+                utils.check(False, lambda: f"`thunder.distributed.fsdp` does not support `no_sync` yet.")
+            case _:
+                utils.check(False, lambda: f"called with unexpected {ddp_type=}")
+
     preaverage_grad = grad / group.size()
     match ddp_type:
         case DDPType.REPLICATED:
