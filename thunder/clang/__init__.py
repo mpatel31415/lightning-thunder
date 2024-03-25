@@ -1169,6 +1169,7 @@ def mT_scalar_warning():
         UserWarning,
     )
 
+
 @clangop(method_name="mT")
 def matrix_transpose(a: TensorProxy) -> TensorProxy:
     """Transposes the last two dimensions of a tensor.
@@ -1190,7 +1191,6 @@ def matrix_transpose(a: TensorProxy) -> TensorProxy:
                 [2, 5],
                 [3, 6]])
     """
-
 
     if a.ndim == 0:
         mT_scalar_warning()
