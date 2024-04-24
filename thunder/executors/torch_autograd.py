@@ -113,6 +113,11 @@ def split_forward_backward(computation_trc: TraceCtx, compile_data, compile_stat
         fw_trace = _fsdp_comm_bucketing.apply_bucketing_to_forward_trace(fw_trace, bw_trace.names)
         _fsdp_comm_bucketing.update_name_set(bw_trace)
 
+    # Replace uniform with uniform_philox and rng state operators for better rematerialization
+    from thunder.core.rematerialization import replace_uniform
+
+    fw_trace = replace_uniform(fw_trace)
+
     # Now we can run the optimization passes on the forward trace
     # TODO Restore request for no rematerialization
     fw_extrace = transform_for_execution(
