@@ -4069,7 +4069,7 @@ def sigmoid(a: TensorLike, /) -> TensorLike:
 
 
 # CompositeImplicitAutograd - don't register decomp
-@torchsymbol(torch.softmax, torch.nn.functional.softmax, is_method=True)
+@torchsymbol(torch.softmax, torch.nn.functional.softmax, is_method=True, id="softmax")
 def _softmax(
     a: TensorLike,
     /,
